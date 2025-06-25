@@ -137,7 +137,7 @@ def main():
     learning_rate = 0.01
     momentum = 0.9
     weight_decay = 1e-4
-    num_epochs = 50
+    num_epochs = 20
     
     # Load data
     train_loader, test_loader, classes = load_data(batch_size)

@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-
+from cifar10_cnn import CIFAR10_CNN
 # Set random seed for reproducibility
 torch.manual_seed(42)
 
@@ -81,7 +81,7 @@ def load_data(batch_size=128):
     
     return trainloader, testloader, classes
 
-def train_kd(student, teacher, train_loader, epoch):
+def train_kd(student, teacher, train_loader, optimizer, ce_criterion, kl_criterion, temperature, alpha, epoch):
     student.train()
     running_loss, correct, total = 0.0, 0, 0
 
@@ -100,11 +100,11 @@ def train_kd(student, teacher, train_loader, epoch):
         ce_loss = ce_criterion(s_logits, targets)
 
         # soft-target loss (KL between softened distributions)
-        s_log_prob = F.log_softmax(s_logits / TEMPERATURE, dim=1)
-        t_prob     = F.softmax   (t_logits / TEMPERATURE, dim=1)
-        kd_loss = kl_criterion(s_log_prob, t_prob) * (TEMPERATURE ** 2) # multiplying to scale it back according to ce loss
+        s_log_prob = F.log_softmax(s_logits / temperature, dim=1)
+        t_prob     = F.softmax   (t_logits / temperature, dim=1)
+        kd_loss = kl_criterion(s_log_prob, t_prob) * (temperature ** 2) # multiplying to scale it back according to ce loss
 
-        loss = ALPHA * kd_loss + (1.0 - ALPHA) * ce_loss
+        loss = alpha * kd_loss + (1.0 - alpha) * ce_loss
 
         # ---------- backward ----------
         optimizer.zero_grad()
@@ -117,7 +117,7 @@ def train_kd(student, teacher, train_loader, epoch):
         running_loss += loss.item()
 
         loop.set_postfix(loss=running_loss/(loop.n+1),
-                         acc=100.*correct/total)
+                        acc=100.*correct/total)
 
     return running_loss/len(train_loader), 100.*correct/total
 
@@ -144,3 +144,120 @@ def test(model, test_loader, criterion):
                                    acc=100.*correct/total)
     
     return running_loss/len(test_loader), 100.*correct/total
+
+def main():
+    # Hyperparameters
+    batch_size = 128
+    learning_rate = 0.01
+    momentum = 0.9
+    weight_decay = 1e-4
+    num_epochs = 20
+
+    # --- KD hyper-parameters  ----------------------------------------------------
+    temperature = 4.0          # τ in the paper
+    alpha       = 0.9          # weight on soft-target (KD) loss
+    # ---------------------------------------------------------------------------
+    
+    # Initialize loss functions
+    ce_criterion = nn.CrossEntropyLoss()                     # hard labels
+    kl_criterion = nn.KLDivLoss(reduction='batchmean')       # soft targets (KL)
+    
+    # Load teacher model
+    teacher = CIFAR10_CNN().to(device)
+    try:
+        teacher.load_state_dict(torch.load("cifar10_cnn_best.pth", map_location=device))
+        teacher.eval()  # inference-only
+        for p in teacher.parameters():  # freeze weights
+            p.requires_grad = False
+        print("Successfully loaded teacher model")
+    except Exception as e:
+        print(f"Error loading teacher model: {e}")
+        return
+    
+    # Load data
+    train_loader, test_loader, classes = load_data(batch_size)
+    
+    # Initialize model
+    model = SmallCIFAR10_CNN().to(device)
+    
+    # Count parameters
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f'Total trainable parameters: {total_params:,}')
+    
+    # Loss and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate, 
+                         momentum=momentum, weight_decay=weight_decay)
+    
+    # Learning rate scheduler
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)
+    
+    # Training loop
+    best_acc = 0.0
+    train_losses, train_accs, test_losses, test_accs = [], [], [], []
+    
+    for epoch in range(num_epochs):
+        # Train
+        train_loss, train_acc = train_kd(
+            student=model,
+            teacher=teacher,
+            train_loader=train_loader,
+            optimizer=optimizer,
+            ce_criterion=ce_criterion,
+            kl_criterion=kl_criterion,
+            temperature=temperature,
+            alpha=alpha,
+            epoch=epoch
+        )
+        train_losses.append(train_loss)
+        train_accs.append(train_acc)
+        
+        # Test
+        test_loss, test_acc = test(model, test_loader, criterion)
+        test_losses.append(test_loss)
+        test_accs.append(test_acc)
+        
+        # Update learning rate
+        scheduler.step(test_acc)
+        
+        # Print epoch results
+        print(f'Epoch: {epoch+1:3d} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | ' \
+              f'Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}%')
+        
+        # Save best model
+        if test_acc > best_acc:
+            best_acc = test_acc
+            torch.save(model.state_dict(), 'distilled_model_best.pth')
+            print(f'Best model saved with accuracy: {best_acc:.2f}%')
+    
+    print(f'Finished Training. Best test accuracy: {best_acc:.2f}%')
+    
+    # Plot training history
+    plt.figure(figsize=(12, 4))
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(train_accs, label='Train')
+    plt.plot(test_accs, label='Test')
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(train_losses, label='Train')
+    plt.plot(test_losses, label='Test')
+    plt.title('Loss over epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(train_accs, label='Train')
+    plt.plot(test_accs, label='Test')
+    plt.title('Accuracy over epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig('small_cnn_training_history.png')
+    plt.show()
+
+if __name__ == '__main__':
+    main()

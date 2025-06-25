@@ -178,7 +178,7 @@ def main():
         # Save best model
         if test_acc > best_acc:
             best_acc = test_acc
-            torch.save(model.state_dict(), 'cifar10_small_cnn_best.pth')
+            torch.save(model.state_dict(), 'small_best.pth')
         
         print(f'Epoch: {epoch+1:3d} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | ' \
               f'Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}% | Best Acc: {best_acc:.2f}%')

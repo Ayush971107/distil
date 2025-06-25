@@ -16,9 +16,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Define the CNN architecture
-class CIFAR10_CNN(nn.Module):
+class Teacher(nn.Module):
     def __init__(self):
-        super(CIFAR10_CNN, self).__init__()
+        super(Teacher, self).__init__()
         self.features = nn.Sequential(
             # Input: 3x32x32
             nn.Conv2d(3, 64, kernel_size=3, padding=1),
@@ -155,7 +155,7 @@ def main():
     train_loader, test_loader, classes = load_data(batch_size)
     
     # Initialize model
-    model = CIFAR10_CNN().to(device)
+    model = Teacher().to(device)
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -190,7 +190,7 @@ def main():
         # Save best model
         if test_acc > best_acc:
             best_acc = test_acc
-            torch.save(model.state_dict(), 'cifar10_cnn_best.pth')
+            torch.save(model.state_dict(), 'teacher_best.pth')
         
         print(f'Epoch: {epoch+1:3d} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | ' \
               f'Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}% | Best Acc: {best_acc:.2f}%')

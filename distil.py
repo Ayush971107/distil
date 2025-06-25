@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from cifar10_cnn import CIFAR10_CNN
+from teacher import Teacher
 # Set random seed for reproducibility
 torch.manual_seed(42)
 
@@ -15,7 +15,7 @@ torch.manual_seed(42)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-class SmallCIFAR10_CNN(nn.Module):
+class Student(nn.Module):
     def __init__(self):
         super(SmallCIFAR10_CNN, self).__init__()
         self.features = nn.Sequential(
@@ -163,9 +163,9 @@ def main():
     kl_criterion = nn.KLDivLoss(reduction='batchmean')       # soft targets (KL)
     
     # Load teacher model
-    teacher = CIFAR10_CNN().to(device)
+    teacher = Teacher().to(device)
     try:
-        teacher.load_state_dict(torch.load("cifar10_cnn_best.pth", map_location=device))
+        teacher.load_state_dict(torch.load("teacher_best.pth", map_location=device))
         teacher.eval()  # inference-only
         for p in teacher.parameters():  # freeze weights
             p.requires_grad = False
@@ -178,7 +178,7 @@ def main():
     train_loader, test_loader, classes = load_data(batch_size)
     
     # Initialize model
-    model = SmallCIFAR10_CNN().to(device)
+    model = Student().to(device)
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

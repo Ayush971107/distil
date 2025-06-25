@@ -121,4 +121,26 @@ def train_kd(student, teacher, train_loader, epoch):
 
     return running_loss/len(train_loader), 100.*correct/total
 
-
+def test(model, test_loader, criterion):
+    model.eval()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        progress_bar = tqdm(test_loader, desc='Testing', leave=False)
+        for inputs, targets in progress_bar:
+            inputs, targets = inputs.to(device), targets.to(device)
+            
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+            running_loss += loss.item()
+            
+            progress_bar.set_postfix(loss=running_loss/(progress_bar.n+1), 
+                                   acc=100.*correct/total)
+    
+    return running_loss/len(test_loader), 100.*correct/total

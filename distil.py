@@ -80,3 +80,45 @@ def load_data(batch_size=128):
                'dog', 'frog', 'horse', 'ship', 'truck')
     
     return trainloader, testloader, classes
+
+def train_kd(student, teacher, train_loader, epoch):
+    student.train()
+    running_loss, correct, total = 0.0, 0, 0
+
+    loop = tqdm(train_loader, desc=f"Epoch {epoch+1} [KD-Train]", leave=False)
+    for inputs, targets in loop:
+        inputs, targets = inputs.to(device), targets.to(device)
+
+        # ---------- forward ----------
+        with torch.no_grad():                     # teacher prediction
+            t_logits = teacher(inputs)
+
+        s_logits = student(inputs)
+
+        # ---------- losses ----------
+        # hard-label loss
+        ce_loss = ce_criterion(s_logits, targets)
+
+        # soft-target loss (KL between softened distributions)
+        s_log_prob = F.log_softmax(s_logits / TEMPERATURE, dim=1)
+        t_prob     = F.softmax   (t_logits / TEMPERATURE, dim=1)
+        kd_loss = kl_criterion(s_log_prob, t_prob) * (TEMPERATURE ** 2) # multiplying to scale it back according to ce loss
+
+        loss = ALPHA * kd_loss + (1.0 - ALPHA) * ce_loss
+
+        # ---------- backward ----------
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        _, pred = s_logits.max(1)
+        total   += targets.size(0)
+        correct += pred.eq(targets).sum().item()
+        running_loss += loss.item()
+
+        loop.set_postfix(loss=running_loss/(loop.n+1),
+                         acc=100.*correct/total)
+
+    return running_loss/len(train_loader), 100.*correct/total
+
+

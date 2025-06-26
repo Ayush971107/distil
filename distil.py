@@ -17,7 +17,7 @@ print(f"Using device: {device}")
 
 class Student(nn.Module):
     def __init__(self):
-        super(SmallCIFAR10_CNN, self).__init__()
+        super(Student, self).__init__()
         self.features = nn.Sequential(
             # Input: 3x32x32
             nn.Conv2d(3, 32, kernel_size=3, padding=1),  # 32x32x32

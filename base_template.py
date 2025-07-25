@@ -15,45 +15,45 @@ torch.manual_seed(42)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Define the CNN architecture
+
 class Teacher(nn.Module):
-    def __init__(self):
-        super(Teacher, self).__init__()
+    """Larger teacher network for knowledge distillation"""
+    
+    def __init__(self, in_channels=3, num_classes=10):
+        super().__init__()
         self.features = nn.Sequential(
             # Input: 3x32x32
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, 64, 3, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.Conv2d(64, 64, 3, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 16x16
+            nn.MaxPool2d(2, 2),  # 16x16
             
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.Conv2d(64, 128, 3, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.Conv2d(128, 128, 3, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 8x8
+            nn.MaxPool2d(2, 2),  # 8x8
             
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.Conv2d(128, 256, 3, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.Conv2d(256, 256, 3, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 4x4
+            nn.MaxPool2d(2, 2),  # 4x4
         )
         
         self.classifier = nn.Sequential(
             nn.Dropout(0.5),
-            nn.Linear(256 * 4 * 4, 1024),
+            nn.Linear(256 * 4 * 4, 512),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
-            nn.Linear(1024, 512),
-            nn.ReLU(inplace=True),
-            nn.Linear(512, 10)
+            nn.Linear(512, num_classes)
         )
         
     def forward(self, x):
@@ -62,7 +62,41 @@ class Teacher(nn.Module):
         x = self.classifier(x)
         return x
 
+
+class Student(nn.Module):
+    """Smaller student network for knowledge distillation"""
+    
+    def __init__(self, in_channels=3, num_classes=10):
+        super().__init__()
+        self.features = nn.Sequential(
+            # Input: 3x32x32
+            nn.Conv2d(in_channels, 16, 3, padding=1),  # 32x32x16
+            nn.BatchNorm2d(16),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, 2),  # 16x16x16
+            
+            nn.Conv2d(16, 32, 3, padding=1),  # 16x16x32
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2, 2),  # 8x8x32
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.25),
+            nn.Linear(32 * 8 * 8, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, num_classes)
+        )
+    
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+        return x
+
+
 def load_data(batch_size=128):
+    """Load and preprocess CIFAR-10 dataset"""
     # Data augmentation and normalization for training
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
@@ -93,7 +127,9 @@ def load_data(batch_size=128):
     
     return trainloader, testloader, classes
 
-def train(model, train_loader, criterion, optimizer, epoch):
+
+def train_standard(model, train_loader, criterion, optimizer, epoch):
+    """Standard training function for regular models"""
     model.train()
     running_loss = 0.0
     correct = 0
@@ -119,7 +155,49 @@ def train(model, train_loader, criterion, optimizer, epoch):
     
     return running_loss/len(train_loader), 100.*correct/total
 
+
+def train_kd(student, teacher, train_loader, optimizer, ce_criterion, kl_criterion, temperature, alpha, epoch):
+    """Knowledge distillation training function"""
+    student.train()
+    running_loss, correct, total = 0.0, 0, 0
+
+    loop = tqdm(train_loader, desc=f"Epoch {epoch+1} [KD-Train]", leave=False)
+    for inputs, targets in loop:
+        inputs, targets = inputs.to(device), targets.to(device)
+
+        # Forward pass
+        with torch.no_grad():
+            t_logits = teacher(inputs)
+
+        s_logits = student(inputs)
+
+        # Calculate losses
+        ce_loss = ce_criterion(s_logits, targets)  # Hard-label loss
+        
+        # Soft-target loss (KL between softened distributions)
+        s_log_prob = F.log_softmax(s_logits / temperature, dim=1)
+        t_prob = F.softmax(t_logits / temperature, dim=1)
+        kd_loss = kl_criterion(s_log_prob, t_prob) * (temperature ** 2)
+
+        loss = alpha * kd_loss + (1.0 - alpha) * ce_loss
+
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        _, pred = s_logits.max(1)
+        total += targets.size(0)
+        correct += pred.eq(targets).sum().item()
+        running_loss += loss.item()
+
+        loop.set_postfix(loss=running_loss/(loop.n+1), acc=100.*correct/total)
+
+    return running_loss/len(train_loader), 100.*correct/total
+
+
 def test(model, test_loader, criterion):
+    """Test function for model evaluation"""
     model.eval()
     running_loss = 0.0
     correct = 0
@@ -143,61 +221,9 @@ def test(model, test_loader, criterion):
     
     return running_loss/len(test_loader), 100.*correct/total
 
-def main():
-    # Hyperparameters
-    batch_size = 128
-    learning_rate = 0.01
-    momentum = 0.9
-    weight_decay = 5e-4
-    num_epochs = 10
-    
-    # Load data
-    train_loader, test_loader, classes = load_data(batch_size)
-    
-    # Initialize model
-    model = Teacher().to(device)
-    
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f'Total trainable parameters: {total_params:,}')
-    
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate, 
-                         momentum=momentum, weight_decay=weight_decay)
-    
-    # Learning rate scheduler
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5, factor=0.5, verbose=True)
-    
-    # Training loop
-    best_acc = 0.0
-    train_losses, train_accs, test_losses, test_accs = [], [], [], []
-    
-    for epoch in range(num_epochs):
-        # Train
-        train_loss, train_acc = train(model, train_loader, criterion, optimizer, epoch)
-        train_losses.append(train_loss)
-        train_accs.append(train_acc)
-        
-        # Test
-        test_loss, test_acc = test(model, test_loader, criterion)
-        test_losses.append(test_loss)
-        test_accs.append(test_acc)
-        
-        # Update learning rate
-        scheduler.step(test_acc)
-        
-        # Save best model
-        if test_acc > best_acc:
-            best_acc = test_acc
-            torch.save(model.state_dict(), 'teacher_best.pth')
-        
-        print(f'Epoch: {epoch+1:3d} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | ' \
-              f'Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}% | Best Acc: {best_acc:.2f}%')
-    
-    print(f'Finished Training. Best test accuracy: {best_acc:.2f}%')
-    
-    # Plot training history
+
+def plot_training_history(train_losses, train_accs, test_losses, test_accs, save_path='training_history.png'):
+    """Plot and save training history"""
     plt.figure(figsize=(12, 4))
     
     plt.subplot(1, 2, 1)
@@ -217,8 +243,10 @@ def main():
     plt.legend()
     
     plt.tight_layout()
-    plt.savefig('training_history.png')
+    plt.savefig(save_path)
     plt.show()
 
-if __name__ == '__main__':
-    main()
+
+def count_parameters(model):
+    """Count trainable parameters in model"""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)

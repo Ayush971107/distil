@@ -1,23 +1,32 @@
-# Train larger model on CIFAR10 (Around 15M parameters)
-# Train a smaller model (without distil) [$437,034$ parameters]
-# Train same arch model with distil
+# Knowledge Distillation on CIFAR-10
 
-loss = weighed sum of soft targets + labels
+This repository implements knowledge distillation for training smaller student models using larger teacher models on CIFAR-10.
 
+## Repository Structure
 
-τ -> Dividing logits by τ smooths (flattens) the teacher’s output distribution.
-This makes the student learn more from the distribution of the teacher (also learning shared traits between the classes)
+- **`base_template.py`**: Contains model architectures (Teacher & Student) and common training utilities
+- **`train_teacher.py`**: Script for training the larger teacher model  
+- **`train_student.py`**: Script for training the smaller student model using knowledge distillation
 
-Hyper-parameter ablation
+## Usage
 
-Sweep a grid over τ ∈ {2, 4, 8} and α ∈ {0.5, 0.7, 0.9}.
+### 1. Train Teacher Model
+```bash
+python train_teacher.py
+```
+This trains a larger CNN (teacher) and saves the best model as `teacher_best.pth`.
 
-Plot test-accuracy vs. those settings to see how sensitive KD is to your choices.
+### 2. Train Student Model (Knowledge Distillation)
+```bash
+python train_student.py
+```
+This trains a smaller CNN (student) using knowledge distillation from the pre-trained teacher.
 
-Student capacity study
+## Knowledge Distillation Details
 
-Try two smaller students (e.g. halve the channel counts, or remove one Conv block) and one larger student (add extra filters).
+**Loss Function**: `loss = α × KD_loss + (1-α) × CE_loss`
+- KD_loss: KL divergence between softened teacher and student outputs
+- CE_loss: Standard cross-entropy with ground truth labels
+- α: Weight balancing soft vs hard targets
 
-Train each with and without KD. You’ll observe how the teacher helps (or doesn’t) as the student capacity changes.
-
-next -> run more experiments (take inspiration from the paper)
+**Temperature (τ)**: Divides logits to smooth probability distributions, helping the student learn from the teacher's uncertainty.
